@@ -49,11 +49,18 @@ export class Ec2Stack extends cdk.Stack {
       "FastAPI from developer IP only"
     );
 
-    // HTTP (80) – developer IP only (for nginx reverse proxy if needed)
+    // HTTP (80) – developer IP only
     sg.addIngressRule(
       ec2.Peer.ipv4(MY_IP_CIDR),
       ec2.Port.tcp(80),
       "HTTP from developer IP only"
+    );
+
+    // HTTPS (443) – developer IP only
+    sg.addIngressRule(
+      ec2.Peer.ipv4(MY_IP_CIDR),
+      ec2.Port.tcp(443),
+      "HTTPS from developer IP only"
     );
 
     // ── IAM Role (EC2 → DynamoDB) ─────────────────────────────────────────
