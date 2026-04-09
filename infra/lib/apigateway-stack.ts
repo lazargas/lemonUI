@@ -35,9 +35,10 @@ export class ApiGatewayStack extends cdk.Stack {
     });
 
     // ── HTTP Integration → EC2 ────────────────────────────────────────────
+    // Port 80 is used — nginx on EC2 redirects 80 → 8000 internally.
     const integration = new integrations.HttpUrlIntegration(
       "LemonEc2Integration",
-      `http://${ec2PublicDns}:8000/{proxy}`,
+      `http://${ec2PublicDns}/{proxy}`,
       {
         method: apigwv2.HttpMethod.ANY,
       }
@@ -56,7 +57,7 @@ export class ApiGatewayStack extends cdk.Stack {
       methods: [apigwv2.HttpMethod.GET],
       integration: new integrations.HttpUrlIntegration(
         "LemonHealthIntegration",
-        `http://${ec2PublicDns}:8000/health`
+        `http://${ec2PublicDns}/health`
       ),
     });
 
