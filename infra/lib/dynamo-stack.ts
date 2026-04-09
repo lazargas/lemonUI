@@ -8,14 +8,15 @@ import { Construct } from "constructs";
  * Provisions all 8 DynamoDB tables for the Lemon platform.
  *
  * Table inventory:
- *   1. SimUsers            – pk / sk  (no GSI)
- *   2. SimEvents           – pk / sk  + GSI1 (gsi1pk/gsi1sk) + GSI2 (gsi2pk/gsi2sk)
- *   3. UserSprintFacts     – pk / sk  + GSI1 + GSI2
- *   4. UserSprintContext   – pk / sk  (no GSI)
- *   5. Projects            – pk / sk  (no GSI)
- *   6. ProjectMappings     – pk / sk  + GSI1
- *   7. ProjectFacts        – pk / sk  + GSI1
- *   8. ProjectSprintContext– pk / sk  (no GSI)
+ *   1.  SimUsers            – pk / sk  (no GSI)
+ *   1b. SimState            – pk / sk  (no GSI)  pk=SIM#<simId> sk=STATE
+ *   2.  SimEvents           – pk / sk  + GSI1 (gsi1pk/gsi1sk) + GSI2 (gsi2pk/gsi2sk)
+ *   3.  UserSprintFacts     – pk / sk  + GSI1 + GSI2
+ *   4.  UserSprintContext   – pk / sk  (no GSI)
+ *   5.  Projects            – pk / sk  (no GSI)
+ *   6.  ProjectMappings     – pk / sk  + GSI1
+ *   7.  ProjectFacts        – pk / sk  + GSI1
+ *   8.  ProjectSprintContext– pk / sk  (no GSI)
  *
  * All tables use:
  *   - PAY_PER_REQUEST billing
@@ -73,6 +74,11 @@ export class DynamoStack extends cdk.Stack {
     // Stores simulated user profiles.
     // pk = USER#<userId>   sk = PROFILE
     makeTable("SimUsersTable", "SimUsers");
+
+    // ── 1b. SimState ──────────────────────────────────────────────────────
+    // Stores simulation run state (active/paused/completed) per simulation.
+    // pk = SIM#<simId>   sk = STATE
+    makeTable("SimStateTable", "SimState");
 
     // ── 2. SimEvents ──────────────────────────────────────────────────────
     // Stores all simulated activity events (tickets, comments, PRs, etc.)
