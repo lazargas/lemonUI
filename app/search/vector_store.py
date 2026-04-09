@@ -107,12 +107,33 @@ def similarity_search(
         ],
     }
 
-    logger.debug(
-        f"OpenSearch k-NN search k={k} user_id={user_id} sprint_id={sprint_id}"
+    index_name = get_activity_index()
+    logger.info(
+        f"[OPENSEARCH SEARCH] → index={index_name} k={k} "
+        f"user_id={user_id} sprint_id={sprint_id} "
+        f"has_filter={bool(knn_filters)}"
     )
+    logger.info(f"[OPENSEARCH SEARCH] → query_body={search_body}")
 
-    response = client.search(index=get_activity_index(), body=search_body)
+    try:
+        response = client.search(index=index_name, body=search_body)
+    except Exception as e:
+        logger.error(f"[OPENSEARCH SEARCH] ✗ Search failed: {type(e).__name__}: {e}")
+        raise
+
     hits = response["hits"]["hits"]
+    total = response["hits"].get("total", {})
+    logger.info(
+        f"[OPENSEARCH SEARCH] ← index={index_name} "
+        f"total_hits={total} returned={len(hits)}"
+    )
+    for i, hit in enumerate(hits):
+        logger.info(
+            f"[OPENSEARCH SEARCH] ← hit[{i}] score={hit['_score']} "
+            f"chunk_type={hit['_source'].get('chunk_type')} "
+            f"user_id={hit['_source'].get('user_id')} "
+            f"text_preview={hit['_source'].get('text','')[:100]!r}"
+        )
 
     results = []
     for hit in hits:

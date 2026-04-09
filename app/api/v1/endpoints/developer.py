@@ -1,17 +1,21 @@
 """
 Developer Endpoints
 -------------------
-GET  /api/v1/daily-summary          – fetch precomputed daily standup summary
-GET  /api/v1/sprint-summary         – fetch precomputed sprint summary
-POST /api/v1/search                 – natural-language search over developer activity
+GET  /api/v1/daily-summary                          – fetch precomputed daily standup summary
+GET  /api/v1/sprint-summary                         – fetch precomputed sprint summary
+POST /api/v1/search                                 – natural-language search over developer activity
+GET  /api/v1/standup-helper                         – structured standup talking points, risks, blockers
+GET  /api/v1/pending-attention                      – items needing developer attention this sprint
 """
 from fastapi import APIRouter, Query
 
 from app.schemas.developer import (
     DailySummaryResponse,
+    PendingAttentionResponse,
     SearchRequest,
     SearchResponse,
     SprintSummaryResponse,
+    StandupHelperResponse,
 )
 from app.services.developer_service import DeveloperService
 
@@ -67,3 +71,35 @@ async def search(body: SearchRequest):
         sprint_id=body.sprint_id,
         limit=body.limit,
     )
+
+
+@router.get(
+    "/standup-helper",
+    response_model=StandupHelperResponse,
+    summary="Get standup talking points for a developer",
+    description=(
+        "Returns structured standup talking points, risks to mention, and active blockers "
+        "for the given developer and sprint. Sourced from precomputed UserSprintContext."
+    ),
+)
+async def get_standup_helper(
+    userId: str = Query(..., description="Developer user ID"),
+    sprintId: str = Query(..., description="Sprint ID"),
+):
+    return await _svc.get_standup_helper(user_id=userId, sprint_id=sprintId)
+
+
+@router.get(
+    "/pending-attention",
+    response_model=PendingAttentionResponse,
+    summary="Get items needing developer attention",
+    description=(
+        "Returns a list of items (code reviews, action items, blockers) that need "
+        "the developer's attention in the current sprint."
+    ),
+)
+async def get_pending_attention(
+    userId: str = Query(..., description="Developer user ID"),
+    sprintId: str = Query(..., description="Sprint ID"),
+):
+    return await _svc.get_pending_attention(user_id=userId, sprint_id=sprintId)

@@ -36,10 +36,12 @@ def generate(prompt: str, max_tokens: int = 1024) -> str:
         ],
     }
 
+    prompt_preview = prompt[:300] + ("..." if len(prompt) > 300 else "")
     logger.info(
-        f"Calling Bedrock model={settings.BEDROCK_MODEL_ID} "
-        f"max_tokens={max_tokens}"
+        f"[BEDROCK LLM] → model={settings.BEDROCK_MODEL_ID} "
+        f"max_tokens={max_tokens} prompt_length={len(prompt)}"
     )
+    logger.info(f"[BEDROCK LLM] → prompt_preview={prompt_preview!r}")
 
     try:
         response = client.invoke_model(
@@ -50,9 +52,16 @@ def generate(prompt: str, max_tokens: int = 1024) -> str:
         )
         result = json.loads(response["body"].read())
         text = result["content"][0]["text"]
-        logger.info("Bedrock response received successfully")
+        usage = result.get("usage", {})
+        logger.info(
+            f"[BEDROCK LLM] ← model={settings.BEDROCK_MODEL_ID} "
+            f"input_tokens={usage.get('input_tokens','?')} "
+            f"output_tokens={usage.get('output_tokens','?')} "
+            f"response_length={len(text)}"
+        )
+        logger.info(f"[BEDROCK LLM] ← response_preview={text[:300]!r}")
         return text.strip()
 
     except Exception as e:
-        logger.error(f"Bedrock invocation failed: {e}")
+        logger.error(f"[BEDROCK LLM] ✗ Bedrock invocation failed: {type(e).__name__}: {e}")
         raise

@@ -11,8 +11,11 @@ from typing import Any, Dict, List, Optional
 
 from app.schemas.developer import (
     DailySummaryResponse,
+    PendingAttentionItem,
+    PendingAttentionResponse,
     SearchResponse,
     SprintSummaryResponse,
+    StandupHelperResponse,
 )
 from app.sprint_memory.persistence.user_sprint_context_accessor import UserSprintContextAccessor
 from app.sprint_memory.persistence.user_sprint_facts_accessor import UserSprintFactsAccessor
@@ -201,4 +204,81 @@ class DeveloperService:
             query=query,
             answer=answer,
             sources=sources,
+        )
+
+    # ── Standup Helper ─────────────────────────────────────────────────────
+
+    async def get_standup_helper(
+        self, user_id: str, sprint_id: str
+    ) -> StandupHelperResponse:
+        """
+        Return structured standup talking points, risks, and blockers
+        directly from the precomputed UserSprintContext.
+        """
+        logger.info(
+            f"Fetching standup helper for user_id={user_id} sprint_id={sprint_id}"
+        )
+
+        ctx = self._context_accessor.get_context(user_id, sprint_id)
+
+        if ctx is None:
+            return StandupHelperResponse(
+                user_id=user_id,
+                sprint_id=sprint_id,
+                suggested_talking_points=[
+                    "No sprint context available yet. Run the summarization job first."
+                ],
+                risks_to_mention=[],
+                blockers=[],
+                generated_at=datetime.now(timezone.utc).isoformat(),
+            )
+
+        risks_to_mention = [r.summary for r in ctx.risks] if ctx.risks else []
+
+        return StandupHelperResponse(
+            user_id=user_id,
+            sprint_id=sprint_id,
+            suggested_talking_points=ctx.suggested_talking_points,
+            risks_to_mention=risks_to_mention,
+            blockers=ctx.blockers,
+            generated_at=ctx.last_refreshed_at,
+        )
+
+    # ── Pending Attention ──────────────────────────────────────────────────
+
+    async def get_pending_attention(
+        self, user_id: str, sprint_id: str
+    ) -> PendingAttentionResponse:
+        """
+        Return items that need the developer's attention this sprint,
+        sourced from the precomputed UserSprintContext.
+        """
+        logger.info(
+            f"Fetching pending attention for user_id={user_id} sprint_id={sprint_id}"
+        )
+
+        ctx = self._context_accessor.get_context(user_id, sprint_id)
+
+        if ctx is None:
+            return PendingAttentionResponse(
+                user_id=user_id,
+                sprint_id=sprint_id,
+                items=[],
+                generated_at=datetime.now(timezone.utc).isoformat(),
+            )
+
+        items = [
+            PendingAttentionItem(
+                type=p.type,
+                sim_id=p.sim_id,
+                summary=p.summary,
+            )
+            for p in ctx.pending_attention
+        ]
+
+        return PendingAttentionResponse(
+            user_id=user_id,
+            sprint_id=sprint_id,
+            items=items,
+            generated_at=ctx.last_refreshed_at,
         )

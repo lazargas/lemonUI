@@ -29,9 +29,10 @@ def embed(text: str) -> List[float]:
         "normalize": True,
     }
 
-    logger.debug(
-        f"Generating embedding model={settings.BEDROCK_EMBEDDING_MODEL_ID} "
-        f"text_length={len(text)}"
+    logger.info(
+        f"[BEDROCK EMBED] → model={settings.BEDROCK_EMBEDDING_MODEL_ID} "
+        f"text_length={len(text)} "
+        f"payload={json.dumps({'inputText': text[:200] + ('...' if len(text) > 200 else ''), 'normalize': True})}"
     )
 
     try:
@@ -42,10 +43,15 @@ def embed(text: str) -> List[float]:
             body=json.dumps(body),
         )
         result = json.loads(response["body"].read())
-        return result["embedding"]
+        embedding = result["embedding"]
+        logger.info(
+            f"[BEDROCK EMBED] ← model={settings.BEDROCK_EMBEDDING_MODEL_ID} "
+            f"embedding_dims={len(embedding)} first_3={embedding[:3]}"
+        )
+        return embedding
 
     except Exception as e:
-        logger.error(f"Embedding generation failed: {e}")
+        logger.error(f"[BEDROCK EMBED] ✗ Embedding generation failed: {type(e).__name__}: {e}")
         raise
 
 

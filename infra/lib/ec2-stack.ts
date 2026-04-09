@@ -148,6 +148,44 @@ WantedBy=multi-user.target
 EOF`,
       "systemctl daemon-reload",
       "systemctl enable lemon",
+
+      // ── Install and configure nginx ──────────────────────
+      // nginx listens on port 80 and proxies to FastAPI on 8000.
+      // API Gateway → EC2 uses HTTP port 80; TLS is terminated at API Gateway.
+      "yum install -y nginx",
+      `cat > /etc/nginx/nginx.conf << 'NGINXCONF'
+events {
+    worker_connections 1024;
+}
+
+http {
+    upstream fastapi {
+        server 127.0.0.1:8000;
+    }
+
+    server {
+        listen 80;
+        server_name _;
+
+        location / {
+            proxy_pass http://fastapi;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_read_timeout 300s;
+            proxy_connect_timeout 10s;
+            proxy_send_timeout 300s;
+        }
+    }
+}
+NGINXCONF`,
+      "systemctl enable nginx",
+      "systemctl start nginx",
+
       "echo 'EC2 bootstrap complete. Push Docker image and run: systemctl start lemon'"
     );
 
