@@ -46,7 +46,7 @@ def index_chunk(chunk: Dict[str, Any]) -> str:
     }
 
     response = client.index(
-        index=get_activity_index(), body=doc, params={"refresh": "true"}
+        index=get_activity_index(), body=doc
     )
     doc_id = response["_id"]
     logger.debug(f"Indexed chunk doc_id={doc_id} chunk_type={doc['chunk_type']}")

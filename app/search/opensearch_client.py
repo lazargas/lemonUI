@@ -12,8 +12,9 @@ from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth
 from app.core.config import settings
 from app.utils.logger import logger
 
-# Embedding dimensions (must match Titan Embeddings V2 output)
-EMBEDDING_DIMS = 1536
+# Embedding dimensions — Titan Embeddings V2 returns 1024 dims by default
+# (1536 is only returned when outputEmbeddingLength=1536 is explicitly set)
+EMBEDDING_DIMS = 1024
 
 
 def get_activity_index() -> str:
