@@ -1,0 +1,53 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+
+# Tests
+tests/
+pytest.ini
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Infra (not needed in container)
+infra/
+
+# Migrations (run separately)
+migrations/
+alembic.ini
+
+# Env files (injected at runtime)
+.env
+.env.*
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+logs/

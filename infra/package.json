@@ -1,0 +1,24 @@
+{
+  "name": "lemon-infra",
+  "version": "0.1.0",
+  "description": "AWS CDK infrastructure for the Lemon FastAPI app",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "cdk": "cdk",
+    "deploy": "cdk deploy --all --require-approval never",
+    "destroy": "cdk destroy --all",
+    "diff": "cdk diff",
+    "synth": "cdk synth"
+  },
+  "devDependencies": {
+    "aws-cdk": "^2.139.0",
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0",
+    "ts-node": "^10.9.0"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.139.0",
+    "constructs": "^10.3.0"
+  }
+}
