@@ -26,7 +26,6 @@ def embed(text: str) -> List[float]:
 
     body = {
         "inputText": text,
-        "dimensions": 1536,
         "normalize": True,
     }
 

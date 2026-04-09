@@ -35,6 +35,8 @@ class Settings(BaseSettings):
 
     # OpenSearch Serverless
     OPENSEARCH_ENDPOINT: str = ""   # e.g. https://xxxx.us-east-1.aoss.amazonaws.com
+    OPENSEARCH_COLLECTION_NAME: str = "lemon-activity"
+    OPENSEARCH_INDEX: str = "activity-embeddings"
 
     # Security
     SECRET_KEY: str = "change-me-in-production"
@@ -45,6 +47,7 @@ class Settings(BaseSettings):
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = True
+        extra = "ignore"   # silently ignore unknown env vars (e.g. EC2_*, API_GATEWAY_URL)
 
 
 settings = Settings()

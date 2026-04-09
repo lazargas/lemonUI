@@ -5,15 +5,21 @@ from contextlib import asynccontextmanager
 from app.core.config import settings
 from app.api.v1.router import api_router
 from app.core.middleware import register_middlewares
+from app.utils.logger import logger
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    print("Starting up...")
+    logger.info("Starting up Lemon API…")
+    try:
+        from app.search.opensearch_client import ensure_index_exists
+        ensure_index_exists()
+    except Exception as exc:
+        logger.warning(f"OpenSearch index check skipped (not critical for startup): {exc}")
     yield
     # Shutdown
-    print("Shutting down...")
+    logger.info("Shutting down Lemon API…")
 
 
 def create_application() -> FastAPI:

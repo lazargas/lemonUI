@@ -12,11 +12,13 @@ from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth
 from app.core.config import settings
 from app.utils.logger import logger
 
-# k-NN index name used for all activity embeddings
-ACTIVITY_INDEX = "lemon-activity"
-
 # Embedding dimensions (must match Titan Embeddings V2 output)
 EMBEDDING_DIMS = 1536
+
+
+def get_activity_index() -> str:
+    """Return the configured OpenSearch index name."""
+    return settings.OPENSEARCH_INDEX
 
 
 @lru_cache(maxsize=1)
@@ -42,41 +44,55 @@ def get_opensearch_client() -> OpenSearch:
 def ensure_index_exists() -> None:
     """
     Create the k-NN index if it does not already exist.
-    Safe to call on every startup.
+    Safe to call on every startup — non-fatal if OpenSearch is unreachable.
+
+    Notes:
+    - OpenSearch Serverless only supports the 'faiss' k-NN engine (not nmslib).
+    - Uses the index name from settings so it stays in sync with the rest of the app.
     """
-    client = get_opensearch_client()
+    index_name = get_activity_index()
 
-    if client.indices.exists(index=ACTIVITY_INDEX):
-        logger.info(f"OpenSearch index '{ACTIVITY_INDEX}' already exists")
-        return
+    try:
+        client = get_opensearch_client()
 
-    index_body = {
-        "settings": {
-            "index": {
-                "knn": True,
-                "knn.algo_param.ef_search": 100,
-            }
-        },
-        "mappings": {
-            "properties": {
-                "embedding": {
-                    "type": "knn_vector",
-                    "dimension": EMBEDDING_DIMS,
-                    "method": {
-                        "name": "hnsw",
-                        "space_type": "cosinesimil",
-                        "engine": "nmslib",
+        if client.indices.exists(index=index_name):
+            logger.info(f"OpenSearch index '{index_name}' already exists")
+            return
+
+        index_body = {
+            "settings": {
+                "index": {
+                    "knn": True,
+                    "knn.algo_param.ef_search": 100,
+                }
+            },
+            "mappings": {
+                "properties": {
+                    "embedding": {
+                        "type": "knn_vector",
+                        "dimension": EMBEDDING_DIMS,
+                        "method": {
+                            "name": "hnsw",
+                            "space_type": "cosinesimil",
+                            # OpenSearch Serverless only supports 'faiss' (not 'nmslib')
+                            "engine": "faiss",
+                        },
                     },
-                },
-                "text": {"type": "text"},
-                "user_id": {"type": "keyword"},
-                "sprint_id": {"type": "keyword"},
-                "ticket_id": {"type": "keyword"},
-                "chunk_type": {"type": "keyword"},  # "ticket" | "comment" | "summary"
-                "created_at": {"type": "date"},
-            }
-        },
-    }
+                    "text": {"type": "text"},
+                    "user_id": {"type": "keyword"},
+                    "sprint_id": {"type": "keyword"},
+                    "ticket_id": {"type": "keyword"},
+                    "chunk_type": {"type": "keyword"},
+                    "created_at": {"type": "date"},
+                }
+            },
+        }
 
-    client.indices.create(index=ACTIVITY_INDEX, body=index_body)
-    logger.info(f"Created OpenSearch k-NN index '{ACTIVITY_INDEX}'")
+        client.indices.create(index=index_name, body=index_body)
+        logger.info(f"Created OpenSearch k-NN index '{index_name}'")
+
+    except Exception as exc:
+        # Non-fatal: app can still serve DynamoDB-backed endpoints without OpenSearch
+        logger.warning(
+            f"Could not ensure OpenSearch index exists (non-fatal): {exc}"
+        )

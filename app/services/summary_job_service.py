@@ -7,10 +7,14 @@ Handles on-demand triggering of summary generation jobs
 In production these run on a schedule (EventBridge / cron).
 This service allows manual triggering via API for dev/testing.
 
-NOTE: LLM calls and DynamoDB writes are stubbed with TODO markers.
+Flow per job:
+  1. Fetch activity / context data from DynamoDB
+  2. Render a prompt
+  3. Call Claude 3 Sonnet on Bedrock
+  4. Store the result back in DynamoDB (UserSprintContext / ProjectSprintContext)
 """
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from app.llm.llm_service import generate
@@ -19,23 +23,80 @@ from app.llm.prompts import (
     SPRINT_SUMMARY_PROMPT,
     ROADMAP_SUMMARY_PROMPT,
 )
+from app.sprint_memory.persistence.user_sprint_context_accessor import UserSprintContextAccessor
+from app.sprint_memory.persistence.user_sprint_facts_accessor import UserSprintFactsAccessor
+from app.sprint_memory.persistence.project_sprint_context_accessor import ProjectSprintContextAccessor
+from app.sprint_memory.persistence.project_facts_accessor import ProjectFactsAccessor
+from app.sprint_memory.persistence.sim_events_accessor import SimEventsAccessor
 from app.utils.logger import logger
 
 
+def _format_user_facts(facts: list) -> str:
+    """Render a list of UserSprintFactItem into a readable text block."""
+    if not facts:
+        return "No structured facts available."
+    lines = []
+    for f in facts:
+        lines.append(f"[{f.fact_type}] {f.summary}")
+        if f.details:
+            for k, v in list(f.details.items())[:3]:
+                lines.append(f"  {k}: {v}")
+    return "\n".join(lines)
+
+
+def _format_project_facts(facts: list) -> str:
+    """Render a list of ProjectFactItem into a readable text block."""
+    if not facts:
+        return "No project facts available."
+    lines = []
+    for f in facts:
+        lines.append(f"[{f.project_name or f.project_id}][{f.fact_type}] {f.summary}")
+    return "\n".join(lines)
+
+
 class SummaryJobService:
+
+    def __init__(self) -> None:
+        self._user_context_accessor = UserSprintContextAccessor()
+        self._user_facts_accessor = UserSprintFactsAccessor()
+        self._project_context_accessor = ProjectSprintContextAccessor()
+        self._project_facts_accessor = ProjectFactsAccessor()
+        self._events_accessor = SimEventsAccessor()
+
+    # ── Daily Summary ──────────────────────────────────────────────────────
 
     async def trigger_daily_summary(self, user_id: str) -> dict:
         job_id = str(uuid.uuid4())
         started_at = datetime.now(timezone.utc).isoformat()
         logger.info(f"Triggering daily summary job for user_id={user_id} job_id={job_id}")
 
-        # TODO: Step 1 – fetch yesterday's activity from DynamoDB
-        # activity_records = await activity_repo.get_yesterday(user_id)
-        # activity_text = format_activity(activity_records)
-        activity_text = "No activity data yet — wire in DynamoDB repository."
+        # Step 1 – fetch the most recent sprint context + recent facts from DynamoDB
+        from boto3.dynamodb.conditions import Key
+        from app.sprint_memory.constants import USER_PREFIX, SPRINT_PREFIX
+        from app.sprint_memory.models.user_sprint_context import UserSprintContextItem
+
+        pk = f"{USER_PREFIX}{user_id}"
+        resp = self._user_context_accessor.table.query(
+            KeyConditionExpression=Key("pk").eq(pk) & Key("sk").begins_with(SPRINT_PREFIX),
+            ScanIndexForward=False,
+            Limit=1,
+        )
+        items = resp.get("Items", [])
+
+        activity_text: str
+        sprint_id: Optional[str] = None
+
+        if items:
+            ctx = UserSprintContextItem(**items[0])
+            sprint_id = ctx.sprint_id
+            # Fetch recent facts for this sprint
+            facts = self._user_facts_accessor.query_by_sprint(sprint_id=sprint_id, limit=20)
+            user_facts = [f for f in facts if f.user_id == user_id]
+            activity_text = _format_user_facts(user_facts)
+        else:
+            activity_text = "No activity data found in DynamoDB for this developer."
 
         # Step 2 – render prompt
-        from datetime import date
         prompt = DAILY_SUMMARY_PROMPT.format(
             user_id=user_id,
             date=str(date.today()),
@@ -51,23 +112,30 @@ class SummaryJobService:
             summary = None
             status = "failed"
 
-        # TODO: Step 4 – store result in DynamoDB daily_summaries table
-        # await daily_summary_repo.put({
-        #     "user_id": user_id,
-        #     "date": str(date.today()),
-        #     "summary": summary,
-        #     "generated_at": datetime.now(timezone.utc).isoformat(),
-        # })
+        # Step 4 – update UserSprintContext with the generated summary
+        if summary and sprint_id and items:
+            try:
+                ctx = UserSprintContextItem(**items[0])
+                ctx.summary.overall_status = summary[:500]
+                ctx.last_refreshed_at = datetime.now(timezone.utc).isoformat()
+                ctx.updated_at = ctx.last_refreshed_at
+                self._user_context_accessor.put_context(ctx)
+                logger.info(f"Stored daily summary in UserSprintContext for user_id={user_id}")
+            except Exception as e:
+                logger.warning(f"Failed to store daily summary in DynamoDB (non-fatal): {e}")
 
         return {
             "job_id": job_id,
             "status": status,
             "type": "daily_summary",
             "user_id": user_id,
+            "sprint_id": sprint_id,
             "summary_preview": (summary[:200] + "...") if summary and len(summary) > 200 else summary,
             "started_at": started_at,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }
+
+    # ── Sprint Summary ─────────────────────────────────────────────────────
 
     async def trigger_sprint_summary(self, user_id: str, sprint_id: str) -> dict:
         job_id = str(uuid.uuid4())
@@ -77,10 +145,14 @@ class SummaryJobService:
             f"sprint_id={sprint_id} job_id={job_id}"
         )
 
-        # TODO: Step 1 – fetch all sprint activity from DynamoDB
-        # activity_records = await activity_repo.get_by_sprint(user_id, sprint_id)
-        # activity_text = format_activity(activity_records)
-        activity_text = "No activity data yet — wire in DynamoDB repository."
+        # Step 1 – fetch all sprint facts for this user + sprint from DynamoDB
+        try:
+            facts = self._user_facts_accessor.query_by_sprint(sprint_id=sprint_id, limit=50)
+            user_facts = [f for f in facts if f.user_id == user_id]
+            activity_text = _format_user_facts(user_facts)
+        except Exception as e:
+            logger.warning(f"DynamoDB fetch failed for sprint summary (non-fatal): {e}")
+            activity_text = "No activity data available — DynamoDB fetch failed."
 
         # Step 2 – render prompt
         prompt = SPRINT_SUMMARY_PROMPT.format(
@@ -98,8 +170,18 @@ class SummaryJobService:
             summary = None
             status = "failed"
 
-        # TODO: Step 4 – store result in DynamoDB sprint_summaries table
-        # await sprint_summary_repo.put({...})
+        # Step 4 – update UserSprintContext with the generated summary
+        if summary:
+            try:
+                ctx = self._user_context_accessor.get_context(user_id, sprint_id)
+                if ctx:
+                    ctx.summary.overall_status = summary[:500]
+                    ctx.last_refreshed_at = datetime.now(timezone.utc).isoformat()
+                    ctx.updated_at = ctx.last_refreshed_at
+                    self._user_context_accessor.put_context(ctx)
+                    logger.info(f"Stored sprint summary in UserSprintContext for user_id={user_id} sprint_id={sprint_id}")
+            except Exception as e:
+                logger.warning(f"Failed to store sprint summary in DynamoDB (non-fatal): {e}")
 
         return {
             "job_id": job_id,
@@ -112,6 +194,8 @@ class SummaryJobService:
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }
 
+    # ── Roadmap Summary ────────────────────────────────────────────────────
+
     async def trigger_roadmap_summary(self, sprint_id: str) -> dict:
         job_id = str(uuid.uuid4())
         started_at = datetime.now(timezone.utc).isoformat()
@@ -119,10 +203,13 @@ class SummaryJobService:
             f"Triggering roadmap summary job for sprint_id={sprint_id} job_id={job_id}"
         )
 
-        # TODO: Step 1 – fetch project facts and sprint context from DynamoDB
-        # project_data = await project_facts_repo.get_all_for_sprint(sprint_id)
-        # project_text = format_project_data(project_data)
-        project_text = "No project data yet — wire in DynamoDB repository."
+        # Step 1 – fetch all project facts for this sprint from DynamoDB
+        try:
+            facts = self._project_facts_accessor.query_by_sprint(sprint_id=sprint_id, limit=100)
+            project_text = _format_project_facts(facts)
+        except Exception as e:
+            logger.warning(f"DynamoDB fetch failed for roadmap summary (non-fatal): {e}")
+            project_text = "No project data available — DynamoDB fetch failed."
 
         # Step 2 – render prompt
         prompt = ROADMAP_SUMMARY_PROMPT.format(
@@ -139,8 +226,32 @@ class SummaryJobService:
             summary = None
             status = "failed"
 
-        # TODO: Step 4 – store result in DynamoDB roadmap_summaries table
-        # await roadmap_summary_repo.put({...})
+        # Step 4 – update all ProjectSprintContext records for this sprint
+        if summary:
+            try:
+                from boto3.dynamodb.conditions import Key
+                from app.sprint_memory.constants import SPRINT_PREFIX
+                from app.sprint_memory.models.project_sprint_context import ProjectSprintContextItem
+
+                gsi1pk = f"{SPRINT_PREFIX}{sprint_id}"
+                resp = self._project_context_accessor.table.query(
+                    IndexName="gsi1pk-gsi1sk-index",
+                    KeyConditionExpression=Key("gsi1pk").eq(gsi1pk),
+                    Limit=100,
+                )
+                now = datetime.now(timezone.utc).isoformat()
+                for item in resp.get("Items", []):
+                    try:
+                        ctx = ProjectSprintContextItem(**item)
+                        ctx.leadership_summary.one_liner = summary[:200]
+                        ctx.last_refreshed_at = now
+                        ctx.updated_at = now
+                        self._project_context_accessor.put_context(ctx)
+                    except Exception as inner_exc:
+                        logger.warning(f"Failed to update project context item: {inner_exc}")
+                logger.info(f"Stored roadmap summary in ProjectSprintContext for sprint_id={sprint_id}")
+            except Exception as e:
+                logger.warning(f"Failed to store roadmap summary in DynamoDB (non-fatal): {e}")
 
         return {
             "job_id": job_id,

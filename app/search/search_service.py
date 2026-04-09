@@ -7,6 +7,11 @@ Full search pipeline:
   3. Retrieve top-k relevant chunks from OpenSearch Serverless
   4. Send chunks + query to Claude 3 Sonnet on Bedrock
   5. Return the LLM answer with source references
+
+Graceful degradation
+---------------------
+If OpenSearch is unreachable or the index is empty, the service returns a
+helpful fallback message instead of raising a 500 error.
 """
 from typing import Any, Dict, List, Optional
 
@@ -14,6 +19,16 @@ from app.search.vector_store import similarity_search
 from app.llm.llm_service import generate
 from app.llm.prompts import SEARCH_ANSWER_PROMPT
 from app.utils.logger import logger
+
+_OPENSEARCH_UNAVAILABLE_MSG = (
+    "The semantic search index is currently unavailable. "
+    "Please try again later or contact the platform team."
+)
+
+_NO_RESULTS_MSG = (
+    "No relevant activity data was found for this query. "
+    "The index may be empty or the query may not match any stored activity."
+)
 
 
 def search(
@@ -43,35 +58,54 @@ def search(
     )
 
     # ── Step 1: Semantic retrieval ─────────────────────────────────────────
-    chunks = similarity_search(
-        query=query,
-        k=k,
-        user_id=user_id,
-        sprint_id=sprint_id,
-    )
+    chunks: List[Dict[str, Any]] = []
+    try:
+        chunks = similarity_search(
+            query=query,
+            k=k,
+            user_id=user_id,
+            sprint_id=sprint_id,
+        )
+    except Exception as exc:
+        logger.error(f"OpenSearch similarity_search failed: {exc}")
+        return {
+            "query": query,
+            "answer": _OPENSEARCH_UNAVAILABLE_MSG,
+            "sources": [],
+        }
 
     if not chunks:
         logger.warning("No relevant chunks found in OpenSearch for query")
         return {
             "query": query,
-            "answer": (
-                "No relevant activity data was found for this query. "
-                "The index may be empty or the query may not match any stored activity."
-            ),
+            "answer": _NO_RESULTS_MSG,
             "sources": [],
         }
 
     # ── Step 2: Build context string ───────────────────────────────────────
     context_parts = []
     for i, chunk in enumerate(chunks, 1):
-        meta = f"[{i}] ({chunk.get('chunk_type', 'unknown')} | {chunk.get('ticket_id', 'N/A')} | {chunk.get('created_at', 'N/A')})"
+        meta = (
+            f"[{i}] ({chunk.get('chunk_type', 'unknown')} | "
+            f"{chunk.get('ticket_id', 'N/A')} | "
+            f"{chunk.get('created_at', 'N/A')})"
+        )
         context_parts.append(f"{meta}\n{chunk['text']}")
 
     context = "\n\n".join(context_parts)
 
     # ── Step 3: LLM answer ─────────────────────────────────────────────────
-    prompt = SEARCH_ANSWER_PROMPT.format(query=query, context=context)
-    answer = generate(prompt, max_tokens=512)
+    try:
+        prompt = SEARCH_ANSWER_PROMPT.format(query=query, context=context)
+        answer = generate(prompt, max_tokens=512)
+    except Exception as exc:
+        logger.error(f"LLM generation failed during search: {exc}")
+        # Return the raw chunks as a fallback even if LLM is down
+        answer = (
+            "The AI answer generation is temporarily unavailable. "
+            "Here are the most relevant activity snippets found:\n\n"
+            + "\n".join(f"- {c['text'][:200]}" for c in chunks[:3])
+        )
 
     logger.info(f"Search answer generated for query='{query}'")
 
