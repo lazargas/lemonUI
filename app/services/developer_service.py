@@ -19,8 +19,53 @@ from app.schemas.developer import (
 )
 from app.sprint_memory.persistence.user_sprint_context_accessor import UserSprintContextAccessor
 from app.sprint_memory.persistence.user_sprint_facts_accessor import UserSprintFactsAccessor
+from app.search.vector_store import similarity_search
 from app.search.search_service import search as semantic_search
+from app.llm.llm_service import generate
+from app.llm.prompts import STANDUP_HELPER_PROMPT
 from app.utils.logger import logger
+from app.core.config import settings
+
+# Constant semantic query used to pull relevant activity chunks for standup
+_STANDUP_SEMANTIC_QUERY = (
+    "recent work completed, pull requests merged, code reviews, blockers, "
+    "risks, decisions made, tickets updated, sprint progress"
+)
+
+
+def _parse_section(llm_response: str, section_header: str) -> List[str]:
+    """
+    Parse a named section from the LLM response.
+
+    Expects the format:
+        SECTION_HEADER:
+        - bullet one
+        - bullet two
+
+    Returns a list of bullet strings (stripped, no leading dash), max 3 items.
+    Filters out "Nothing to report" bullets.
+    """
+    lines = llm_response.splitlines()
+    in_section = False
+    bullets: List[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        # Detect section header (case-insensitive, with or without trailing colon)
+        if stripped.upper().rstrip(":") == section_header.upper():
+            in_section = True
+            continue
+        # Stop at the next section header
+        if in_section and stripped and not stripped.startswith("-") and stripped.endswith(":"):
+            break
+        if in_section and stripped.startswith("-"):
+            bullet = stripped.lstrip("-").strip()
+            if bullet and bullet.lower() != "nothing to report":
+                bullets.append(bullet)
+            if len(bullets) >= 3:
+                break
+
+    return bullets
 
 
 class DeveloperService:
@@ -212,36 +257,216 @@ class DeveloperService:
         self, user_id: str, sprint_id: str
     ) -> StandupHelperResponse:
         """
-        Return structured standup talking points, risks, and blockers
-        directly from the precomputed UserSprintContext.
+        Generate an LLM-powered standup update for a developer.
+
+        Flow:
+          1. Fetch UserSprintContext from DynamoDB (structured context)
+          2. Run a constant semantic query against OpenSearch to get
+             relevant recent activity chunks
+          3. Feed both into Claude via STANDUP_HELPER_PROMPT
+          4. Return the LLM-generated bullet-point standup update
+
+        Debug logging is enabled when DEBUG=true in .env.
         """
         logger.info(
-            f"Fetching standup helper for user_id={user_id} sprint_id={sprint_id}"
+            f"[standup-helper] START user_id={user_id} sprint_id={sprint_id}"
         )
+
+        # ── Step 1: Fetch structured context from DynamoDB ─────────────────
+        if settings.DEBUG:
+            logger.debug(
+                f"[standup-helper] Step 1 — DynamoDB lookup "
+                f"pk=USER#{user_id} sk=SPRINT#{sprint_id}"
+            )
 
         ctx = self._context_accessor.get_context(user_id, sprint_id)
 
         if ctx is None:
+            logger.warning(
+                f"[standup-helper] No UserSprintContext found for "
+                f"user_id={user_id} sprint_id={sprint_id} — returning fallback"
+            )
             return StandupHelperResponse(
                 user_id=user_id,
                 sprint_id=sprint_id,
-                suggested_talking_points=[
-                    "No sprint context available yet. Run the summarization job first."
-                ],
+                suggested_talking_points=["No sprint context available yet. Run the summarization job first."],
                 risks_to_mention=[],
                 blockers=[],
                 generated_at=datetime.now(timezone.utc).isoformat(),
             )
 
-        risks_to_mention = [r.summary for r in ctx.risks] if ctx.risks else []
+        if settings.DEBUG:
+            logger.debug(
+                f"[standup-helper] DynamoDB context loaded — "
+                f"last_refreshed={ctx.last_refreshed_at} "
+                f"active_sims={ctx.metrics.active_sim_count} "
+                f"blockers={ctx.metrics.active_blocker_count} "
+                f"risks={ctx.metrics.active_risk_count} "
+                f"recent_facts={ctx.metrics.recent_fact_count}"
+            )
+            logger.debug(
+                f"[standup-helper] Summary status={ctx.summary.overall_status!r} "
+                f"focus={ctx.summary.primary_focus}"
+            )
+            logger.debug(
+                f"[standup-helper] Talking points ({len(ctx.suggested_talking_points)}): "
+                + " | ".join(f"[{i}] {tp[:80]}" for i, tp in enumerate(ctx.suggested_talking_points))
+            )
+            logger.debug(
+                f"[standup-helper] Active SIMs ({len(ctx.active_sims)}): "
+                + " | ".join(f"{s.sim_id}:{s.title[:40]}({s.status})" for s in ctx.active_sims)
+            )
+            logger.debug(
+                f"[standup-helper] Risks ({len(ctx.risks)}): "
+                + " | ".join(f"[{r.sim_id}] {r.summary[:80]}" for r in ctx.risks)
+            )
+            logger.debug(
+                f"[standup-helper] Blockers ({len(ctx.blockers)}): "
+                + " | ".join(ctx.blockers)
+            )
+            logger.debug(
+                f"[standup-helper] Pending attention ({len(ctx.pending_attention)}): "
+                + " | ".join(f"[{p.type}] {p.sim_id}: {p.summary[:60]}" for p in ctx.pending_attention)
+            )
+            logger.debug(
+                f"[standup-helper] Recent changes ({len(ctx.recent_changes)}): "
+                + " | ".join(ctx.recent_changes)
+            )
+
+        # Build the DynamoDB context block for the prompt
+        dynamo_lines: List[str] = []
+        dynamo_lines.append(f"Status: {ctx.summary.overall_status}")
+        dynamo_lines.append(f"Focus: {', '.join(ctx.summary.primary_focus)}")
+        if ctx.suggested_talking_points:
+            dynamo_lines.append("Suggested talking points:")
+            dynamo_lines.extend(f"  - {tp}" for tp in ctx.suggested_talking_points)
+        if ctx.active_sims:
+            dynamo_lines.append("Active SIMs:")
+            for s in ctx.active_sims:
+                progress = "; ".join(s.recent_progress) if s.recent_progress else "no recent progress"
+                dynamo_lines.append(f"  - [{s.sim_id}] {s.title} (status={s.status}, priority={s.priority}): {progress}")
+        if ctx.risks:
+            dynamo_lines.append("Risks:")
+            dynamo_lines.extend(f"  - [{r.sim_id}] {r.summary}" for r in ctx.risks)
+        if ctx.blockers:
+            dynamo_lines.append("Blockers:")
+            dynamo_lines.extend(f"  - {b}" for b in ctx.blockers)
+        if ctx.pending_attention:
+            dynamo_lines.append("Pending action items (things the developer needs to act on):")
+            dynamo_lines.extend(f"  - [{p.type}] {p.sim_id}: {p.summary}" for p in ctx.pending_attention)
+        if ctx.recent_changes:
+            dynamo_lines.append("Recent changes:")
+            dynamo_lines.extend(f"  - {c}" for c in ctx.recent_changes)
+        dynamo_context = "\n".join(dynamo_lines)
+
+        # ── Step 2: Semantic search for relevant activity chunks ───────────
+        if settings.DEBUG:
+            logger.debug(
+                f"[standup-helper] Step 2 — OpenSearch semantic search "
+                f"query='{_STANDUP_SEMANTIC_QUERY[:60]}...' "
+                f"user_id={user_id} sprint_id={sprint_id} k=8"
+            )
+
+        semantic_chunks: List[str] = []
+        try:
+            chunks = similarity_search(
+                query=_STANDUP_SEMANTIC_QUERY,
+                k=8,
+                user_id=user_id,
+                sprint_id=sprint_id,
+            )
+            if settings.DEBUG:
+                logger.debug(
+                    f"[standup-helper] OpenSearch returned {len(chunks)} chunks"
+                )
+            for i, chunk in enumerate(chunks):
+                meta = (
+                    f"[{chunk.get('chunk_type', 'unknown')} | "
+                    f"{chunk.get('ticket_id', 'N/A')} | "
+                    f"score={chunk.get('score', 0):.3f}]"
+                )
+                semantic_chunks.append(f"{meta}\n{chunk['text']}")
+                if settings.DEBUG:
+                    logger.debug(
+                        f"[standup-helper] chunk[{i}] type={chunk.get('chunk_type')} "
+                        f"score={chunk.get('score', 0):.3f} "
+                        f"text={chunk['text'][:100]!r}"
+                    )
+        except Exception as exc:
+            logger.warning(
+                f"[standup-helper] OpenSearch unavailable (non-fatal): {exc}"
+            )
+
+        semantic_context = (
+            "\n\n".join(semantic_chunks)
+            if semantic_chunks
+            else "No semantic activity chunks available."
+        )
+
+        # ── Step 3: Generate standup update via LLM ────────────────────────
+        if settings.DEBUG:
+            logger.debug(
+                f"[standup-helper] Step 3 — Calling Bedrock LLM "
+                f"dynamo_lines={len(dynamo_lines)} semantic_chunks={len(semantic_chunks)}"
+            )
+
+        prompt = STANDUP_HELPER_PROMPT.format(
+            user_id=user_id,
+            sprint_id=sprint_id,
+            dynamo_context=dynamo_context,
+            semantic_context=semantic_context,
+        )
+
+        try:
+            llm_response = generate(prompt, max_tokens=600)
+        except Exception as exc:
+            logger.error(f"[standup-helper] LLM generation failed: {exc}")
+            # Fall back to raw DynamoDB data
+            return StandupHelperResponse(
+                user_id=user_id,
+                sprint_id=sprint_id,
+                suggested_talking_points=ctx.suggested_talking_points[:3],
+                risks_to_mention=[r.summary for r in ctx.risks][:3],
+                blockers=ctx.blockers[:3],
+                generated_at=datetime.now(timezone.utc).isoformat(),
+            )
+
+        if settings.DEBUG:
+            logger.debug(
+                f"[standup-helper] LLM raw response ({len(llm_response)} chars):\n{llm_response}"
+            )
+
+        # ── Step 4: Parse LLM response into structured lists ──────────────
+        talking_points = _parse_section(llm_response, "TALKING_POINTS")
+        risks_to_mention = _parse_section(llm_response, "RISKS")
+        blockers = _parse_section(llm_response, "BLOCKERS")
+        pending_items = _parse_section(llm_response, "PENDING_ITEMS")
+
+        if settings.DEBUG:
+            logger.debug(
+                f"[standup-helper] Parsed — "
+                f"talking_points={talking_points} "
+                f"risks={risks_to_mention} "
+                f"blockers={blockers} "
+                f"pending_items={pending_items}"
+            )
+
+        logger.info(
+            f"[standup-helper] DONE user_id={user_id} sprint_id={sprint_id} "
+            f"semantic_chunks={len(semantic_chunks)} "
+            f"talking_points={len(talking_points)} "
+            f"risks={len(risks_to_mention)} blockers={len(blockers)} "
+            f"pending_items={len(pending_items)}"
+        )
 
         return StandupHelperResponse(
             user_id=user_id,
             sprint_id=sprint_id,
-            suggested_talking_points=ctx.suggested_talking_points,
+            suggested_talking_points=talking_points,
             risks_to_mention=risks_to_mention,
-            blockers=ctx.blockers,
-            generated_at=ctx.last_refreshed_at,
+            blockers=blockers,
+            pending_items=pending_items,
+            generated_at=datetime.now(timezone.utc).isoformat(),
         )
 
     # ── Pending Attention ──────────────────────────────────────────────────

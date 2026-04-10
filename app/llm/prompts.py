@@ -70,6 +70,50 @@ Project Data:
 Write the leadership roadmap summary now:"""
 
 
+# ── Standup Helper ────────────────────────────────────────────────────────
+STANDUP_HELPER_PROMPT = """You are an engineering assistant helping a developer prepare for their daily standup.
+
+Using the sprint context and recent activity below, generate a short standup update.
+
+Output exactly four sections using these exact headers (no changes to the headers):
+
+TALKING_POINTS:
+- point one
+- point two
+- point three
+
+RISKS:
+- risk one
+- risk two
+
+BLOCKERS:
+- blocker one
+
+PENDING_ITEMS:
+- action item one
+- action item two
+
+Rules:
+- Maximum 3 bullet points per section
+- Each bullet must be one short sentence, plain English, first person
+- Do not use emojis, markdown bold, asterisks, or any special symbols
+- Do not number the bullets
+- If a section has nothing to report, write a single bullet: "Nothing to report"
+- Be specific and human — mention ticket names, decisions, or PR status where relevant
+- PENDING_ITEMS should be concrete action items the developer needs to act on (e.g. review a PR, respond to a comment, make a decision)
+
+Developer: {user_id}
+Sprint: {sprint_id}
+
+Sprint Context:
+{dynamo_context}
+
+Recent Activity:
+{semantic_context}
+
+Generate the standup update now:"""
+
+
 # ── Search Answer ──────────────────────────────────────────────────────────
 SEARCH_ANSWER_PROMPT = """You are an engineering intelligence assistant that answers questions about developer activity.
 

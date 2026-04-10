@@ -16,7 +16,7 @@ import { Construct } from "constructs";
  *   5.  Projects            – pk / sk  (no GSI)
  *   6.  ProjectMappings     – pk / sk  + GSI1
  *   7.  ProjectFacts        – pk / sk  + GSI1
- *   8.  ProjectSprintContext– pk / sk  (no GSI)
+ *   8.  ProjectSprintContext– pk / sk  + GSI1 (gsi1pk/gsi1sk)
  *
  * All tables use:
  *   - PAY_PER_REQUEST billing
@@ -125,7 +125,9 @@ export class DynamoStack extends cdk.Stack {
     // ── 8. ProjectSprintContext ───────────────────────────────────────────
     // Stores the precomputed sprint context summary per project per sprint.
     // pk = PROJECT#<projectId>   sk = SPRINT#<sprintId>
-    makeTable("ProjectSprintContextTable", "ProjectSprintContext");
+    // GSI1: gsi1pk = SPRINT#<sprintId>   gsi1sk = PROJECT#<projectId>  (list all projects in a sprint)
+    const projectSprintContext = makeTable("ProjectSprintContextTable", "ProjectSprintContext");
+    addGsi(projectSprintContext, "gsi1pk-gsi1sk-index", GSI1PK, GSI1SK);
 
     // ── Outputs ───────────────────────────────────────────────────────────
     Object.entries(this.tables).forEach(([name, table]) => {

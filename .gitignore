@@ -37,3 +37,7 @@ migrations/versions/*.py
 
 # Logs
 *.log
+
+
+#scripts
+scripts/
