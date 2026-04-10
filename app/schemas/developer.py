@@ -34,9 +34,10 @@ class SearchResponse(BaseModel):
 class StandupHelperResponse(BaseModel):
     user_id: str
     sprint_id: str
-    suggested_talking_points: List[str] = []
-    risks_to_mention: List[str] = []
-    blockers: List[str] = []
+    suggested_talking_points: List[str] = []   # LLM-generated, max 3 items
+    risks_to_mention: List[str] = []           # LLM-generated, max 3 items
+    blockers: List[str] = []                   # LLM-generated, max 3 items
+    pending_items: List[str] = []              # LLM-generated action items, max 3
     generated_at: str
 
 
