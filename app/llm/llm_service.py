@@ -74,6 +74,10 @@ async def generate_stream(prompt: str, max_tokens: int = 1024) -> AsyncGenerator
     Stream a response from Claude on Bedrock using invoke_model_with_response_stream.
     Yields plain text chunks as they arrive — suitable for SSE.
 
+    The synchronous Bedrock stream iteration runs in a thread pool executor and
+    pushes chunks into an asyncio.Queue so the event loop is never blocked.
+    This allows other requests to be served concurrently while Claude is generating.
+
     Args:
         prompt:     The fully-rendered prompt string.
         max_tokens: Maximum tokens in the response (default 1024).
@@ -82,6 +86,8 @@ async def generate_stream(prompt: str, max_tokens: int = 1024) -> AsyncGenerator
         str — incremental text chunks from the model.
     """
     import asyncio
+
+    _SENTINEL = object()  # signals end of stream
 
     client = get_bedrock_runtime()
 
@@ -97,50 +103,73 @@ async def generate_stream(prompt: str, max_tokens: int = 1024) -> AsyncGenerator
     )
 
     loop = asyncio.get_event_loop()
+    queue: asyncio.Queue = asyncio.Queue()
 
-    # invoke_model_with_response_stream is synchronous — run in executor
-    response = await loop.run_in_executor(
-        None,
-        lambda: client.invoke_model_with_response_stream(
-            modelId=settings.BEDROCK_MODEL_ID,
-            contentType="application/json",
-            accept="application/json",
-            body=body,
-        ),
-    )
-
-    stream = response.get("body")
-    if not stream:
-        logger.warning("[BEDROCK STREAM] Empty stream body returned")
-        return
-
-    for event in stream:
-        chunk = event.get("chunk")
-        if not chunk:
-            continue
-        raw = chunk.get("bytes", b"")
-        if not raw:
-            continue
+    def _stream_in_thread():
+        """
+        Runs entirely in a thread. Calls Bedrock, iterates the sync stream,
+        and puts text chunks (or exceptions) into the asyncio queue.
+        Never touches the event loop directly.
+        """
         try:
-            data = json.loads(raw.decode("utf-8"))
-        except Exception:
-            continue
+            response = client.invoke_model_with_response_stream(
+                modelId=settings.BEDROCK_MODEL_ID,
+                contentType="application/json",
+                accept="application/json",
+                body=body,
+            )
+            stream = response.get("body")
+            if not stream:
+                logger.warning("[BEDROCK STREAM] Empty stream body returned")
+                return
 
-        event_type = data.get("type", "")
+            for event in stream:
+                chunk = event.get("chunk")
+                if not chunk:
+                    continue
+                raw = chunk.get("bytes", b"")
+                if not raw:
+                    continue
+                try:
+                    data = json.loads(raw.decode("utf-8"))
+                except Exception:
+                    continue
 
-        # Claude streaming event types
-        if event_type == "content_block_delta":
-            delta = data.get("delta", {})
-            text = delta.get("text", "")
-            if text:
-                yield text
+                event_type = data.get("type", "")
 
-        elif event_type == "message_stop":
-            logger.info("[BEDROCK STREAM] ← stream complete")
+                if event_type == "content_block_delta":
+                    text = data.get("delta", {}).get("text", "")
+                    if text:
+                        loop.call_soon_threadsafe(queue.put_nowait, text)
+
+                elif event_type == "message_stop":
+                    logger.info("[BEDROCK STREAM] ← stream complete")
+                    break
+
+                elif event_type == "error":
+                    error_msg = data.get("error", {}).get("message", "Unknown streaming error")
+                    logger.error(f"[BEDROCK STREAM] ✗ {error_msg}")
+                    loop.call_soon_threadsafe(
+                        queue.put_nowait, Exception(error_msg)
+                    )
+                    return
+
+        except Exception as exc:
+            logger.error(f"[BEDROCK STREAM] ✗ thread error: {exc}")
+            loop.call_soon_threadsafe(queue.put_nowait, exc)
+        finally:
+            # Always signal completion
+            loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
+
+    # Start the blocking stream in a background thread
+    loop.run_in_executor(None, _stream_in_thread)
+
+    # Drain the queue asynchronously — event loop stays free
+    while True:
+        item = await queue.get()
+        if item is _SENTINEL:
             break
-
-        elif event_type == "error":
-            error_msg = data.get("error", {}).get("message", "Unknown streaming error")
-            logger.error(f"[BEDROCK STREAM] ✗ {error_msg}")
-            yield f"\n[Error: {error_msg}]"
+        if isinstance(item, Exception):
+            yield f"\n[Error: {item}]"
             break
+        yield item
