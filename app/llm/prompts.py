@@ -78,32 +78,34 @@ Using the sprint context and recent activity below, generate a short standup upd
 Output exactly four sections using these exact headers (no changes to the headers):
 
 TALKING_POINTS:
-- point one
-- point two
-- point three
+- <summary text> | <url1> <url2>
+- <summary text> | <url1>
+- <summary text> |
 
 RISKS:
-- risk one
-- risk two
+- <summary text> | <url1>
+- <summary text> |
 
 BLOCKERS:
-- blocker one
+- <summary text> | <url1>
 
 PENDING_ITEMS:
-- action item one
-- action item two
+- <summary text> | <url1> <url2>
+- <summary text> |
 
 Rules:
 - Maximum 3 bullet points per section
-- Each bullet must be one short sentence, plain English, first person
+- Each bullet MUST follow the format: <summary text> | <space-separated SIM/ticket URLs>
+- If there are no URLs for a bullet, still include the pipe: "Summary text |"
+- Summary text must be one short sentence, plain English, first person
+- URLs must be real SIM/ticket URLs from the context (e.g. https://issues.amazon.com/issues/TI-3137 or https://sim.amazon.com/issues/TI-3137)
+- Only include URLs that are explicitly mentioned in the sprint context or activity below
 - Do not use emojis, markdown bold, asterisks, or any special symbols
 - Do not number the bullets
-- If a section has nothing to report, write a single bullet: "Nothing to report"
-- NEVER use vague terms like "some tickets", "a few items", "several tasks", "various issues" — always name the specific ticket title
+- If a section has nothing to report, write a single bullet: "Nothing to report |"
+- NEVER use vague terms like "some tickets", "a few items", "several tasks" — always name the specific ticket title
 - Always refer to tickets by their title (e.g. "Fix permissions bug in audit role") not by UUID or internal ID
-- PENDING_ITEMS should be concrete action items the developer needs to act on (e.g. review a PR, respond to a comment, make a decision)
-- If a ticket is blocked, name the ticket title and what it is blocked on
-- If a ticket is in review, name the ticket title and who is reviewing
+- PENDING_ITEMS should be concrete action items the developer needs to act on
 
 Developer: {user_id}
 Sprint: {sprint_id}

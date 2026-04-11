@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import developer, project, leadership, ingestion, jobs, search, standup
+from app.api.v1.endpoints import developer, project, projects_cache, leadership, ingestion, jobs, search, standup
 
 api_router = APIRouter()
 
@@ -14,6 +14,11 @@ api_router.include_router(developer.router, tags=["Developer"])
 # POST /api/v1/search
 # GET  /api/v1/generate-answer  (SSE streaming)
 api_router.include_router(search.router, tags=["Search"])
+
+# ── Projects Cache APIs ────────────────────────────────────────────────────
+# POST /api/v1/projects/trigger          (must be before /{projectId} routes)
+# GET  /api/v1/projects/cached?sprintId=
+api_router.include_router(projects_cache.router, prefix="/projects", tags=["Projects"])
 
 # ── Project APIs ───────────────────────────────────────────────────────────
 # GET /api/v1/projects?sprintId=

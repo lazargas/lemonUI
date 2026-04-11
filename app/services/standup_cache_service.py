@@ -27,9 +27,29 @@ from typing import List, Optional
 import boto3
 
 from app.core.config import settings
-from app.schemas.developer import CachedStandupResponse, StandupTriggerResponse
+from app.schemas.developer import CachedStandupResponse, StandupItem, StandupTriggerResponse
 from app.services.developer_service import DeveloperService
 from app.utils.logger import logger
+
+
+def _serialize_items(items: List) -> list:
+    """Convert List[StandupItem] → plain dicts for DynamoDB storage."""
+    return [{"summary": i.summary, "resources": i.resources} for i in items]
+
+
+def _deserialize_items(raw: list) -> List[StandupItem]:
+    """Convert plain dicts from DynamoDB → List[StandupItem]."""
+    result = []
+    for item in raw:
+        if isinstance(item, dict):
+            result.append(StandupItem(
+                summary=item.get("summary", ""),
+                resources=item.get("resources", []),
+            ))
+        elif isinstance(item, str):
+            # backwards-compat: old entries stored plain strings
+            result.append(StandupItem(summary=item))
+    return result
 
 _STANDUP_CACHE_TABLE = "StandupCache"
 _USER_PREFIX = "USER#"
@@ -136,10 +156,10 @@ class StandupCacheService:
                     },
                     ExpressionAttributeValues={
                         ":s": "completed",
-                        ":tp": result.suggested_talking_points,
-                        ":rm": result.risks_to_mention,
-                        ":bl": result.blockers,
-                        ":pi": result.pending_items,
+                        ":tp": _serialize_items(result.suggested_talking_points),
+                        ":rm": _serialize_items(result.risks_to_mention),
+                        ":bl": _serialize_items(result.blockers),
+                        ":pi": _serialize_items(result.pending_items),
                         ":ga": result.generated_at,
                         ":e": None,
                     },
@@ -195,10 +215,10 @@ class StandupCacheService:
         return CachedStandupResponse(
             user_id=item.get("user_id", user_id),
             sprint_id=item.get("sprint_id", sprint_id),
-            suggested_talking_points=item.get("suggested_talking_points", []),
-            risks_to_mention=item.get("risks_to_mention", []),
-            blockers=item.get("blockers", []),
-            pending_items=item.get("pending_items", []),
+            suggested_talking_points=_deserialize_items(item.get("suggested_talking_points", [])),
+            risks_to_mention=_deserialize_items(item.get("risks_to_mention", [])),
+            blockers=_deserialize_items(item.get("blockers", [])),
+            pending_items=_deserialize_items(item.get("pending_items", [])),
             generated_at=item.get("generated_at", ""),
             job_id=item.get("job_id", ""),
             status=item.get("status", "unknown"),

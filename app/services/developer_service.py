@@ -16,6 +16,7 @@ from app.schemas.developer import (
     SearchResponse,
     SprintSummaryResponse,
     StandupHelperResponse,
+    StandupItem,
 )
 from app.sprint_memory.persistence.user_sprint_context_accessor import UserSprintContextAccessor
 from app.sprint_memory.persistence.user_sprint_facts_accessor import UserSprintFactsAccessor
@@ -33,39 +34,53 @@ _STANDUP_SEMANTIC_QUERY = (
 )
 
 
-def _parse_section(llm_response: str, section_header: str) -> List[str]:
+def _parse_section(llm_response: str, section_header: str) -> List["StandupItem"]:
     """
     Parse a named section from the LLM response.
 
     Expects the format:
         SECTION_HEADER:
-        - bullet one
-        - bullet two
+        - Summary text | https://issues.amazon.com/issues/TI-3137 https://sim.amazon.com/issues/TI-9999
+        - Summary text |
 
-    Returns a list of bullet strings (stripped, no leading dash), max 3 items.
+    Each bullet is split on the first '|':
+      - left  → summary text
+      - right → space-separated URLs (may be empty)
+
+    Returns a list of StandupItem, max 3 items.
     Filters out "Nothing to report" bullets.
     """
+    from app.schemas.developer import StandupItem
+
     lines = llm_response.splitlines()
     in_section = False
-    bullets: List[str] = []
+    items: List[StandupItem] = []
 
     for line in lines:
         stripped = line.strip()
-        # Detect section header (case-insensitive, with or without trailing colon)
         if stripped.upper().rstrip(":") == section_header.upper():
             in_section = True
             continue
-        # Stop at the next section header
         if in_section and stripped and not stripped.startswith("-") and stripped.endswith(":"):
             break
         if in_section and stripped.startswith("-"):
-            bullet = stripped.lstrip("-").strip()
-            if bullet and bullet.lower() != "nothing to report":
-                bullets.append(bullet)
-            if len(bullets) >= 3:
+            raw = stripped.lstrip("-").strip()
+            if not raw or raw.lower().startswith("nothing to report"):
+                continue
+            # Split on first pipe
+            if "|" in raw:
+                summary_part, url_part = raw.split("|", 1)
+                summary = summary_part.strip()
+                resources = [u.strip() for u in url_part.split() if u.strip().startswith("http")]
+            else:
+                summary = raw.strip()
+                resources = []
+            if summary:
+                items.append(StandupItem(summary=summary, resources=resources))
+            if len(items) >= 3:
                 break
 
-    return bullets
+    return items
 
 
 class DeveloperService:
@@ -289,9 +304,10 @@ class DeveloperService:
             return StandupHelperResponse(
                 user_id=user_id,
                 sprint_id=sprint_id,
-                suggested_talking_points=["No sprint context available yet. Run the summarization job first."],
+                suggested_talking_points=[StandupItem(summary="No sprint context available yet. Run the summarization job first.")],
                 risks_to_mention=[],
                 blockers=[],
+                pending_items=[],
                 generated_at=datetime.now(timezone.utc).isoformat(),
             )
 
@@ -425,9 +441,10 @@ class DeveloperService:
             return StandupHelperResponse(
                 user_id=user_id,
                 sprint_id=sprint_id,
-                suggested_talking_points=ctx.suggested_talking_points[:3],
-                risks_to_mention=[r.summary for r in ctx.risks][:3],
-                blockers=ctx.blockers[:3],
+                suggested_talking_points=[StandupItem(summary=s) for s in ctx.suggested_talking_points[:3]],
+                risks_to_mention=[StandupItem(summary=r.summary) for r in ctx.risks[:3]],
+                blockers=[StandupItem(summary=b) for b in ctx.blockers[:3]],
+                pending_items=[],
                 generated_at=datetime.now(timezone.utc).isoformat(),
             )
 

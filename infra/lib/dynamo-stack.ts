@@ -129,7 +129,19 @@ export class DynamoStack extends cdk.Stack {
     const projectSprintContext = makeTable("ProjectSprintContextTable", "ProjectSprintContext");
     addGsi(projectSprintContext, "gsi1pk-gsi1sk-index", GSI1PK, GSI1SK);
 
-    // ── 9. StandupCache ───────────────────────────────────────────────────
+    // ── 9. ProjectsCache ──────────────────────────────────────────────────
+    // Stores pre-generated project list summaries per sprint.
+    // Generated in bulk before leadership review and served instantly.
+    //
+    // pk  = SPRINT#<sprintId>
+    // sk  = METADATA          (single item per sprint — the full projects list)
+    //
+    // GSI1: gsi1pk = JOB#<jobId>   gsi1sk = SPRINT#<sprintId>
+    //   → look up which job generated a given sprint's cache
+    const projectsCache = makeTable("ProjectsCacheTable", "ProjectsCache");
+    addGsi(projectsCache, "gsi1pk-gsi1sk-index", GSI1PK, GSI1SK);
+
+    // ── 10. StandupCache ──────────────────────────────────────────────────
     // Stores pre-generated standup summaries for each developer per sprint.
     // Generated in bulk before standup time (e.g. 11:45 AM) and served
     // instantly at standup time with zero LLM latency.
