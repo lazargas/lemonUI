@@ -57,12 +57,13 @@ async def get_sprint_summary(
 @router.get(
     "/standup-helper",
     response_model=StandupHelperResponse,
-    summary="Get LLM-powered standup update for a developer",
+    deprecated=True,
+    summary="[DEPRECATED] Get LLM-powered standup update for a developer",
     description=(
-        "Fetches UserSprintContext from DynamoDB and recent activity chunks from OpenSearch, "
-        "then uses Claude (Bedrock) to generate structured standup talking points, risks, "
-        "blockers, and pending action items. "
-        "The pending_items field replaces the deprecated /pending-attention endpoint."
+        "DEPRECATED — use POST /standup/trigger + GET /standup/cached instead. "
+        "Those endpoints pre-generate summaries in bulk before standup time and serve "
+        "them instantly with zero LLM latency. "
+        "This endpoint generates on-demand and is slow for large teams."
     ),
 )
 async def get_standup_helper(

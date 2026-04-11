@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import developer, project, leadership, ingestion, jobs, search
+from app.api.v1.endpoints import developer, project, leadership, ingestion, jobs, search, standup
 
 api_router = APIRouter()
 
@@ -30,6 +30,11 @@ api_router.include_router(leadership.router, prefix="/leadership", tags=["Leader
 # POST /api/v1/ingestion/trigger
 # GET  /api/v1/ingestion/status/{jobId}
 api_router.include_router(ingestion.router, prefix="/ingestion", tags=["Ingestion"])
+
+# ── Standup Cache APIs ─────────────────────────────────────────────────────
+# POST /api/v1/standup/trigger
+# GET  /api/v1/standup/cached?userId=&sprintId=
+api_router.include_router(standup.router, prefix="/standup", tags=["Standup"])
 
 # ── Background Job Triggers (dev/testing) ─────────────────────────────────
 # POST /api/v1/jobs/daily-summary?userId=
