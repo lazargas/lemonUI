@@ -129,6 +129,23 @@ export class DynamoStack extends cdk.Stack {
     const projectSprintContext = makeTable("ProjectSprintContextTable", "ProjectSprintContext");
     addGsi(projectSprintContext, "gsi1pk-gsi1sk-index", GSI1PK, GSI1SK);
 
+    // ── 9. StandupCache ───────────────────────────────────────────────────
+    // Stores pre-generated standup summaries for each developer per sprint.
+    // Generated in bulk before standup time (e.g. 11:45 AM) and served
+    // instantly at standup time with zero LLM latency.
+    //
+    // pk  = USER#<userId>
+    // sk  = SPRINT#<sprintId>
+    //
+    // GSI1: gsi1pk = SPRINT#<sprintId>   gsi1sk = USER#<userId>
+    //   → list all cached standups for a sprint (e.g. "show all 10 devs for sprint S42")
+    //
+    // GSI2: gsi2pk = JOB#<jobId>         gsi2sk = USER#<userId>
+    //   → look up all users processed in a specific trigger job
+    const standupCache = makeTable("StandupCacheTable", "StandupCache");
+    addGsi(standupCache, "gsi1pk-gsi1sk-index", GSI1PK, GSI1SK);
+    addGsi(standupCache, "gsi2pk-gsi2sk-index", GSI2PK, GSI2SK);
+
     // ── Outputs ───────────────────────────────────────────────────────────
     Object.entries(this.tables).forEach(([name, table]) => {
       new cdk.CfnOutput(this, `${name}Arn`, {

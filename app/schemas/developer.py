@@ -54,3 +54,31 @@ class PendingAttentionResponse(BaseModel):
     sprint_id: str
     items: List[PendingAttentionItem] = []
     generated_at: str
+
+
+# ── Standup Cache (pre-generated bulk standup) ────────────────────────────────
+
+class StandupTriggerRequest(BaseModel):
+    aliases: List[str]
+    sprint_id: str
+
+
+class StandupTriggerResponse(BaseModel):
+    job_id: str
+    sprint_id: str
+    aliases: List[str]
+    started_at: str
+    status: str = "started"
+
+
+class CachedStandupResponse(BaseModel):
+    user_id: str
+    sprint_id: str
+    suggested_talking_points: List[str] = []
+    risks_to_mention: List[str] = []
+    blockers: List[str] = []
+    pending_items: List[str] = []
+    generated_at: str
+    job_id: str
+    status: str  # "completed" | "failed" | "pending"
+    error: Optional[str] = None
