@@ -31,13 +31,19 @@ class SearchResponse(BaseModel):
 
 # ── Standup Helper ────────────────────────────────────────────────────────────
 
+class StandupItem(BaseModel):
+    """A single standup bullet with an optional list of linked SIM/ticket URLs."""
+    summary: str
+    resources: List[str] = []   # e.g. ["https://issues.amazon.com/issues/TI-3137"]
+
+
 class StandupHelperResponse(BaseModel):
     user_id: str
     sprint_id: str
-    suggested_talking_points: List[str] = []   # LLM-generated, max 3 items
-    risks_to_mention: List[str] = []           # LLM-generated, max 3 items
-    blockers: List[str] = []                   # LLM-generated, max 3 items
-    pending_items: List[str] = []              # LLM-generated action items, max 3
+    suggested_talking_points: List[StandupItem] = []
+    risks_to_mention: List[StandupItem] = []
+    blockers: List[StandupItem] = []
+    pending_items: List[StandupItem] = []
     generated_at: str
 
 
@@ -74,10 +80,10 @@ class StandupTriggerResponse(BaseModel):
 class CachedStandupResponse(BaseModel):
     user_id: str
     sprint_id: str
-    suggested_talking_points: List[str] = []
-    risks_to_mention: List[str] = []
-    blockers: List[str] = []
-    pending_items: List[str] = []
+    suggested_talking_points: List[StandupItem] = []
+    risks_to_mention: List[StandupItem] = []
+    blockers: List[StandupItem] = []
+    pending_items: List[StandupItem] = []
     generated_at: str
     job_id: str
     status: str  # "completed" | "failed" | "pending"
