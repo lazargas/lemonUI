@@ -69,3 +69,25 @@ class RoadmapSummaryResponse(BaseModel):
     dependencies: List[str]
     health_overview: str
     generated_at: str
+
+
+# ── Projects Cache (pre-generated bulk project list) ──────────────────────────
+
+class ProjectsCacheTriggerRequest(BaseModel):
+    sprint_id: str
+
+
+class ProjectsCacheTriggerResponse(BaseModel):
+    job_id: str
+    sprint_id: str
+    started_at: str
+    status: str = "started"
+
+
+class CachedProjectsResponse(BaseModel):
+    sprint_id: str
+    projects: List[ProjectSummary]
+    generated_at: str
+    job_id: str
+    status: str   # "completed" | "pending" | "failed"
+    error: Optional[str] = None
