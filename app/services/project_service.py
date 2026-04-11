@@ -15,6 +15,7 @@ from app.schemas.project import (
     ProjectsListResponse,
     ProjectSummary,
     RoadmapSummaryResponse,
+    SimItem,
     SprintContextResponse,
     TimelineEvent,
     TimelineResponse,
@@ -23,7 +24,28 @@ from app.sprint_memory.persistence.project_facts_accessor import ProjectFactsAcc
 from app.sprint_memory.persistence.project_sprint_context_accessor import ProjectSprintContextAccessor
 from app.sprint_memory.persistence.projects_accessor import ProjectsAccessor
 from app.sprint_memory.persistence.sim_events_accessor import SimEventsAccessor
+import re
+
+from app.llm.llm_service import generate
+from app.llm.prompts import PROJECT_LIST_PROMPT
+from app.search.vector_store import similarity_search
 from app.utils.logger import logger
+from app.sprint_memory.constants import USER_PREFIX
+
+_PROJECT_SEMANTIC_QUERY = (
+    "project status blockers risks decisions SIM tickets progress sprint update"
+)
+
+# UUID pattern — strip these from any user-facing LLM output
+_UUID_RE = re.compile(
+    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+    re.IGNORECASE,
+)
+
+
+def _redact_ids(text: str) -> str:
+    """Remove raw UUIDs from LLM-generated text before returning to end users."""
+    return _UUID_RE.sub("[ticket]", text).strip()
 
 
 class ProjectService:
@@ -118,33 +140,145 @@ class ProjectService:
     # ── Projects List ──────────────────────────────────────────────────────
 
     async def list_projects(self, sprint_id: str) -> ProjectsListResponse:
+        """
+        List all projects for a sprint with LLM-generated summary and progress.
+
+        From DynamoDB (raw):
+          - project_id, project_name, sprint_id, health
+          - sims (active_sims → SimItem list)
+          - developers (active_users → USER#<alias> list)
+
+        From LLM (PROJECT_LIST_PROMPT):
+          - summary (one sentence)
+          - progress (0-100 integer)
+        """
         logger.info(f"Listing projects for sprint_id={sprint_id}")
 
-        # Query all project sprint contexts for this sprint via GSI1
-        # (gsi1pk = SPRINT#<sprintId>)
-        from boto3.dynamodb.conditions import Key
-        from app.sprint_memory.constants import SPRINT_PREFIX
-
-        gsi1pk = f"{SPRINT_PREFIX}{sprint_id}"
-        resp = self._context_accessor.table.query(
-            IndexName="gsi1pk-gsi1sk-index",
-            KeyConditionExpression=Key("gsi1pk").eq(gsi1pk),
-            Limit=100,
-        )
-
+        from boto3.dynamodb.conditions import Attr
         from app.sprint_memory.models.project_sprint_context import ProjectSprintContextItem
+
+        # GSI1 (gsi1pk/gsi1sk) is not populated on existing items — fall back to
+        # a scan filtered by sprint_id. This is acceptable for the small number of
+        # projects per sprint.
+        resp = self._context_accessor.table.scan(
+            FilterExpression=Attr("sprint_id").eq(sprint_id),
+        )
 
         projects: List[ProjectSummary] = []
         for item in resp.get("Items", []):
             try:
                 ctx = ProjectSprintContextItem(**item)
+
+                # ── Raw fields from DynamoDB ───────────────────────────────
+                sims: List[SimItem] = [
+                    SimItem(
+                        sim_id=s.sim_id,
+                        title=s.title,
+                        status=s.status,
+                        owner=s.owner_user_id,
+                    )
+                    for s in ctx.active_sims
+                ]
+
+                developers: List[str] = [
+                    f"{USER_PREFIX}{u.user_id}" if not u.user_id.startswith(USER_PREFIX) else u.user_id
+                    for u in ctx.active_users
+                ]
+
+                health = ctx.summary.health or "unknown"
+
+                # ── LLM: generate summary + progress ──────────────────────
+                summary = ctx.leadership_summary.one_liner or ctx.summary.overall_status or ""
+                progress = 0
+
+                try:
+                    # Build detailed SIM list for the prompt
+                    sim_details_lines: List[str] = []
+                    for s in ctx.active_sims:
+                        sim_details_lines.append(
+                            f"  - {s.sim_id}: {s.title} (status={s.status}, owner={s.owner_user_id})"
+                        )
+                    sim_details = "\n".join(sim_details_lines) if sim_details_lines else "  none"
+
+                    # Developer aliases
+                    dev_aliases = ", ".join(
+                        u.user_id for u in ctx.active_users
+                    ) if ctx.active_users else "none"
+
+                    # Fetch semantic chunks from OpenSearch for this project
+                    semantic_context = "No recent activity available."
+                    try:
+                        chunks = similarity_search(
+                            query=_PROJECT_SEMANTIC_QUERY,
+                            k=6,
+                            sprint_id=ctx.sprint_id,
+                        )
+                        if chunks:
+                            chunk_lines = []
+                            for chunk in chunks:
+                                chunk_lines.append(
+                                    f"[{chunk.get('chunk_type', 'activity')} | "
+                                    f"{chunk.get('ticket_id', 'N/A')}] "
+                                    f"{chunk['text']}"
+                                )
+                            semantic_context = "\n\n".join(chunk_lines)
+                    except Exception as se:
+                        logger.warning(
+                            f"[list-projects] OpenSearch unavailable for "
+                            f"project={ctx.project_id} (non-fatal): {se}"
+                        )
+
+                    prompt = PROJECT_LIST_PROMPT.format(
+                        project_name=ctx.project_name or ctx.project_id,
+                        project_id=ctx.project_id,
+                        sprint_id=ctx.sprint_id,
+                        health=health,
+                        overall_status=ctx.summary.overall_status or "unknown",
+                        active_sim_count=len(ctx.active_sims),
+                        sim_details=sim_details,
+                        blockers="; ".join(ctx.blockers) if ctx.blockers else "none",
+                        risks="; ".join(
+                            f"{r.summary} (severity={r.severity})" for r in ctx.risks
+                        ) if ctx.risks else "none",
+                        recent_changes="; ".join(ctx.recent_changes[:5]) if ctx.recent_changes else "none",
+                        one_liner=ctx.leadership_summary.one_liner or "none",
+                        developers=dev_aliases,
+                        semantic_context=semantic_context,
+                    )
+                    llm_response = generate(prompt, max_tokens=500)
+
+                    # Parse SUMMARY: and PROGRESS: lines
+                    for line in llm_response.splitlines():
+                        line = line.strip()
+                        if line.upper().startswith("SUMMARY:"):
+                            summary = _redact_ids(line[len("SUMMARY:"):].strip())
+                        elif line.upper().startswith("PROGRESS:"):
+                            raw_prog = line[len("PROGRESS:"):].strip().rstrip("%").strip()
+                            try:
+                                progress = max(0, min(100, int(raw_prog)))
+                            except ValueError:
+                                progress = 0
+
+                    logger.info(
+                        f"[list-projects] LLM project={ctx.project_id} "
+                        f"summary={summary[:60]!r} progress={progress}"
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        f"[list-projects] LLM failed for project={ctx.project_id} "
+                        f"(non-fatal, using fallback): {exc}"
+                    )
+
                 projects.append(
                     ProjectSummary(
                         project_id=ctx.project_id,
                         project_name=ctx.project_name or ctx.project_id,
                         sprint_id=ctx.sprint_id,
-                        health=ctx.summary.health or "unknown",
-                        summary=ctx.leadership_summary.one_liner or ctx.summary.overall_status or "",
+                        health=health,
+                        summary=summary,
+                        progress=progress,
+                        sims=sims,
+                        developers=developers,
                     )
                 )
             except Exception as exc:

@@ -3,9 +3,19 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as iam from "aws-cdk-lib/aws-iam";
 import { Construct } from "constructs";
 
-// ⚠️  SECURITY: Only the current developer IP is whitelisted.
+// ⚠️  SECURITY: Only whitelisted developer IPs are allowed.
 //    NO public 0.0.0.0/0 inbound rules are used.
-const MY_IP_CIDR = "15.248.5.71/32";
+//    Add new IPs here — they will be applied on next `cdk deploy`.
+const WHITELISTED_IPS: { cidr: string; description: string }[] = [
+  { cidr: "15.248.5.71/32",      description: "Dev machine - original" },
+  { cidr: "15.248.4.132/32",     description: "Dev machine - Akarsh" },
+  { cidr: "15.248.5.34/32",      description: "Dev machine - Akarsh" },
+  { cidr: "15.248.5.65/32",      description: "Dev machine - Akarsh" },
+  { cidr: "15.248.5.69/32",      description: "Dev machine - Akarsh" },
+  { cidr: "54.240.199.97/32",    description: "Dev machine - Akarsh" },
+  { cidr: "152.59.200.52/32",    description: "Dev machine - Akarsh" },
+  { cidr: "49.205.246.225/32",   description: "Dev machine - Akarsh" },
+];
 
 export class Ec2Stack extends cdk.Stack {
   public readonly instance: ec2.Instance;
@@ -35,33 +45,13 @@ export class Ec2Stack extends cdk.Stack {
       allowAllOutbound: true,
     });
 
-    // SSH – developer IP only
-    sg.addIngressRule(
-      ec2.Peer.ipv4(MY_IP_CIDR),
-      ec2.Port.tcp(22),
-      "SSH from developer IP only"
-    );
-
-    // FastAPI (port 8000) – developer IP only
-    sg.addIngressRule(
-      ec2.Peer.ipv4(MY_IP_CIDR),
-      ec2.Port.tcp(8000),
-      "FastAPI from developer IP only"
-    );
-
-    // HTTP (80) – developer IP only
-    sg.addIngressRule(
-      ec2.Peer.ipv4(MY_IP_CIDR),
-      ec2.Port.tcp(80),
-      "HTTP from developer IP only"
-    );
-
-    // HTTPS (443) – developer IP only
-    sg.addIngressRule(
-      ec2.Peer.ipv4(MY_IP_CIDR),
-      ec2.Port.tcp(443),
-      "HTTPS from developer IP only"
-    );
+    // Whitelist all developer IPs on SSH (22), FastAPI (8000), HTTP (80), HTTPS (443)
+    for (const { cidr, description } of WHITELISTED_IPS) {
+      sg.addIngressRule(ec2.Peer.ipv4(cidr), ec2.Port.tcp(22),   `SSH – ${description}`);
+      sg.addIngressRule(ec2.Peer.ipv4(cidr), ec2.Port.tcp(8000), `FastAPI – ${description}`);
+      sg.addIngressRule(ec2.Peer.ipv4(cidr), ec2.Port.tcp(80),   `HTTP – ${description}`);
+      sg.addIngressRule(ec2.Peer.ipv4(cidr), ec2.Port.tcp(443),  `HTTPS – ${description}`);
+    }
 
     // ── IAM Role (EC2 → DynamoDB) ─────────────────────────────────────────
     const role = new iam.Role(this, "LemonEc2Role", {

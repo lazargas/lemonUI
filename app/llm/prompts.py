@@ -99,8 +99,11 @@ Rules:
 - Do not use emojis, markdown bold, asterisks, or any special symbols
 - Do not number the bullets
 - If a section has nothing to report, write a single bullet: "Nothing to report"
-- Be specific and human — mention ticket names, decisions, or PR status where relevant
+- NEVER use vague terms like "some tickets", "a few items", "several tasks", "various issues" — always name the specific ticket title
+- Always refer to tickets by their title (e.g. "Fix permissions bug in audit role") not by UUID or internal ID
 - PENDING_ITEMS should be concrete action items the developer needs to act on (e.g. review a PR, respond to a comment, make a decision)
+- If a ticket is blocked, name the ticket title and what it is blocked on
+- If a ticket is in review, name the ticket title and who is reviewing
 
 Developer: {user_id}
 Sprint: {sprint_id}
@@ -112,6 +115,48 @@ Recent Activity:
 {semantic_context}
 
 Generate the standup update now:"""
+
+
+# ── Project List Summary ───────────────────────────────────────────────────
+PROJECT_LIST_PROMPT = """You are an engineering assistant writing a sprint status summary for engineering leadership.
+
+Output exactly two lines — nothing else:
+
+SUMMARY: <detailed paragraph, max 250 words, plain English, no emojis, no special symbols>
+PROGRESS: <integer 0-100>
+
+Rules for SUMMARY:
+- Write for engineering leadership who need to make decisions
+- NEVER use vague terms like "some tickets", "a few items", "several tasks", "various issues", "many SIMs" — always use exact numbers and names
+- Always refer to tickets by their title (e.g. "Fix permissions bug in audit role") — NEVER use raw UUIDs or internal IDs
+- Call out every blocker by ticket title and what it is blocking
+- Call out every risk by ticket title and its severity
+- State exactly how many SIMs are open, in progress, blocked, and resolved (use the numbers from the data)
+- Mention which developers are working on which specific tickets (use their aliases)
+- Mention recent changes and decisions made
+- Use plain English, first person plural ("we"), no markdown, no bullet points, no headers
+- Max 250 words
+
+Rules for PROGRESS:
+- Single integer 0-100, no percent sign
+- Base on: health (GREEN=75-100, YELLOW=40-74, RED=0-39), ratio of resolved vs total SIMs, number of blockers
+
+Project: {project_name} ({project_id})
+Sprint: {sprint_id}
+Health: {health}
+Status: {overall_status}
+Active SIMs ({active_sim_count} total):
+{sim_details}
+Blockers: {blockers}
+Risks: {risks}
+Recent changes: {recent_changes}
+Leadership one-liner: {one_liner}
+Developers: {developers}
+
+Recent activity from vector store:
+{semantic_context}
+
+Output:"""
 
 
 # ── Search Answer ──────────────────────────────────────────────────────────
