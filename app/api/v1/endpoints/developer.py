@@ -3,9 +3,10 @@ Developer Endpoints
 -------------------
 GET  /api/v1/daily-summary      – fetch precomputed daily standup summary
 GET  /api/v1/sprint-summary     – fetch precomputed sprint summary
-POST /api/v1/search             – natural-language search over developer activity
 GET  /api/v1/standup-helper     – LLM-powered standup: talking points, risks, blockers, pending items
 GET  /api/v1/pending-attention  – DEPRECATED: use /standup-helper (pending_items field)
+
+Search endpoints (POST /search, GET /generate-answer) live in search.py
 """
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
@@ -13,8 +14,6 @@ from fastapi.responses import JSONResponse
 from app.schemas.developer import (
     DailySummaryResponse,
     PendingAttentionResponse,
-    SearchRequest,
-    SearchResponse,
     SprintSummaryResponse,
     StandupHelperResponse,
 )
@@ -53,24 +52,6 @@ async def get_sprint_summary(
     sprintId: str = Query(..., description="Sprint ID"),
 ):
     return await _svc.get_sprint_summary(user_id=userId, sprint_id=sprintId)
-
-
-@router.post(
-    "/search",
-    response_model=SearchResponse,
-    summary="Natural-language search over developer activity",
-    description=(
-        "Accepts a free-text question and returns a natural-language answer "
-        "backed by structured and/or semantic retrieval over developer activity data."
-    ),
-)
-async def search(body: SearchRequest):
-    return await _svc.search(
-        query=body.query,
-        user_id=body.user_id,
-        sprint_id=body.sprint_id,
-        limit=body.limit,
-    )
 
 
 @router.get(

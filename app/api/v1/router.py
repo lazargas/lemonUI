@@ -1,14 +1,19 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import developer, project, leadership, ingestion, jobs
+from app.api.v1.endpoints import developer, project, leadership, ingestion, jobs, search
 
 api_router = APIRouter()
 
 # ── Developer APIs ─────────────────────────────────────────────────────────
 # GET  /api/v1/daily-summary?userId=
 # GET  /api/v1/sprint-summary?userId=&sprintId=
-# POST /api/v1/search
+# GET  /api/v1/standup-helper?userId=&sprintId=
 api_router.include_router(developer.router, tags=["Developer"])
+
+# ── Search & RAG APIs ──────────────────────────────────────────────────────
+# POST /api/v1/search
+# GET  /api/v1/generate-answer  (SSE streaming)
+api_router.include_router(search.router, tags=["Search"])
 
 # ── Project APIs ───────────────────────────────────────────────────────────
 # GET /api/v1/projects?sprintId=
