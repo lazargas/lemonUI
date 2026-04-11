@@ -24,12 +24,22 @@ class ProjectFactsResponse(BaseModel):
     facts: List[ProjectFact]
 
 
+class SimItem(BaseModel):
+    sim_id: str
+    title: str
+    status: str
+    owner: str             # user alias
+
+
 class ProjectSummary(BaseModel):
     project_id: str
     project_name: str
     sprint_id: str
     health: str            # e.g. "green", "yellow", "red"
-    summary: str
+    summary: str           # LLM-generated
+    progress: int          # LLM-estimated 0-100
+    sims: List[SimItem] = []
+    developers: List[str] = []   # list of user aliases e.g. ["USER#bspvaish"]
 
 
 class ProjectsListResponse(BaseModel):
