@@ -15,6 +15,7 @@ const WHITELISTED_IPS: { cidr: string; description: string }[] = [
   { cidr: "54.240.199.97/32",    description: "Dev machine - Akarsh" },
   { cidr: "152.59.200.52/32",    description: "Dev machine - Akarsh" },
   { cidr: "49.205.246.225/32",   description: "Dev machine - Akarsh" },
+  { cidr: "49.43.104.185/32",    description: "Dev machine - Akarsh" },
 ];
 
 export class Ec2Stack extends cdk.Stack {
